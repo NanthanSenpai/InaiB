@@ -13,6 +13,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -34,14 +38,38 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Locate Android SDK tools
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
+            -type f -name sdkmanager 2>/dev/null \
+            | sort -V | tail -n 1)
+
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: Android sdkmanager was not found."
+            echo "Android SDK location: $ANDROID_HOME"
+            find "$ANDROID_HOME" -maxdepth 4 -type f \
+              -name sdkmanager 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "Using sdkmanager: $SDKMANAGER"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
 
       - name: Install Android SDK 36
         shell: bash
         run: |
-          sdkmanager "platforms;android-36" "build-tools;36.0.0"
-          yes | sdkmanager --licenses > /dev/null || true
+          set -euo pipefail
+
+          yes | "$SDKMANAGER" --licenses || true
+
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-36" \
+            "build-tools;36.0.0"
 
       - name: Find GeckoView version
         shell: bash
@@ -52,14 +80,19 @@ jobs:
             https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview-omni/maven-metadata.xml \
             -o meta.xml
 
-          V=$(sed -n 's:.*<release>\([^<]*\)</release>.*:\1:p' meta.xml | head -n 1)
+          V=$(sed -n \
+            's:.*<release>\([^<]*\)</release>.*:\1:p' \
+            meta.xml | head -n 1)
 
           if [ -z "$V" ]; then
-            V=$(grep -o '<version>[^<]*' meta.xml | sed 's/<version>//' | tail -n 1)
+            V=$(grep -o '<version>[^<]*' meta.xml \
+              | sed 's/<version>//' \
+              | tail -n 1)
           fi
 
           if [ -z "$V" ]; then
             echo "ERROR: Could not determine GeckoView version."
+            cat meta.xml
             exit 1
           fi
 
