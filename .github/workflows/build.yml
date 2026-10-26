@@ -35,9 +35,19 @@ jobs:
         working-directory: InaiBPro
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon -PgeckoVersion=$GV
+          ./gradlew assembleDebug --no-daemon -PgeckoVersion=$GV 2>&1 | tee ../build.log
+          exit ${PIPESTATUS[0]}
+        shell: bash
+
+      - name: SHOW ERRORS HERE
+        if: failure()
+        run: |
+          echo "===== ERROR SUMMARY ====="
+          grep -n -E "^e: |error:|What went wrong|Could not|FAILED|Unresolved|not found" build.log | head -40
+          grep -n -A6 "What went wrong" build.log | head -30
 
       - uses: actions/upload-artifact@v4
         with:
           name: InaiBPro-debug-apk
           path: InaiBPro/app/build/outputs/apk/debug/app-debug.apk
+          
