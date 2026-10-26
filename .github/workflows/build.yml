@@ -5,49 +5,120 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Unpack project
-        run: unzip -q InaiBPro.zip
+        run: |
+          unzip -q InaiBPro.zip
+          test -f InaiBPro/gradlew || {
+            echo "ERROR: InaiBPro/gradlew not found."
+            echo "Check the directory structure inside InaiBPro.zip."
+            exit 1
+          }
 
-      - uses: actions/setup-java@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: '17'
 
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses > /dev/null || true
-
-      - name: Find latest GeckoView version
+      - name: Set up Android SDK
         run: |
-          curl -fsSL https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview-omni/maven-metadata.xml -o meta.xml || { echo "Could not fetch GeckoView metadata"; curl -sS https://maven.mozilla.org/maven2/org/mozilla/geckoview/ | head -40; exit 1; }
-          cat meta.xml
-          V=$(grep -o '<release>[^<]*' meta.xml | sed 's/<release>//')
-          if [ -z "$V" ]; then V=$(grep -o '<version>[^<]*' meta.xml | tail -1 | sed 's/<version>//'); fi
-          echo "Using GeckoView $V"
+          sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Find GeckoView version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          curl -fsSL \
+            https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview-omni/maven-metadata.xml \
+            -o meta.xml
+
+          V=$(sed -n 's:.*<release>\([^<]*\)</release>.*:\1:p' meta.xml | head -1)
+
+          if [ -z "$V" ]; then
+            V=$(grep -o '<version>[^<]*' meta.xml \
+              | sed 's/<version>//' \
+              | tail -1)
+          fi
+
+          if [ -z "$V" ]; then
+            echo "ERROR: Could not determine GeckoView version."
+            cat meta.xml
+            exit 1
+          fi
+
+          echo "Using GeckoView version: $V"
           echo "GV=$V" >> "$GITHUB_ENV"
 
       - name: Build debug APK
         working-directory: InaiBPro
-        run: |
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon -PgeckoVersion=$GV 2>&1 | tee ../build.log
-          exit ${PIPESTATUS[0]}
         shell: bash
-
-      - name: SHOW ERRORS HERE
-        if: failure()
         run: |
-          echo "===== ERROR SUMMARY ====="
-          grep -n -E "^e: |error:|What went wrong|Could not|FAILED|Unresolved|not found" build.log | head -40
-          grep -n -A6 "What went wrong" build.log | head -30
+          set -o pipefail
 
-      - uses: actions/upload-artifact@v4
+          chmod +x gradlew
+
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            -PgeckoVersion="$GV" \
+            2>&1 | tee ../build.log
+
+      - name: Show build errors
+        if: failure()
+        shell: bash
+        run: |
+          echo "========== ERROR SUMMARY =========="
+
+          if [ -f build.log ]; then
+            grep -n -i -E \
+              '(^e: |error:|what went wrong|could not|failed|unresolved|not found|requires libraries|compile against version)' \
+              build.log | head -80 || true
+
+            echo "========== FAILURE DETAILS =========="
+
+            grep -n -A12 -B3 'What went wrong' \
+              build.log | head -80 || true
+
+            echo "========== LAST 100 LOG LINES =========="
+
+            tail -100 build.log
+          else
+            echo "Build log was not created."
+          fi
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
         with:
           name: InaiBPro-debug-apk
           path: InaiBPro/app/build/outputs/apk/debug/app-debug.apk
-          
+          if-no-files-found: error
+          retention-days: 7
+
+### Before running the workflow
+
+Make sure the Android project inside `InaiBPro.zip` has these compatible settings:
+
+| Setting | Required change |
+|---|---|
+| `compileSdk` | Set to `36` |
+| Android Gradle Plugin | Upgrade from `8.7.3` to a version compatible with API 36 |
+| Gradle wrapper | Use a version compatible with the selected Android Gradle Plugin |
+| Java | Keep Java 17 unless your selected toolchain requires otherwise |
+
+**One important detail:** I have not seen the Gradle files inside your ZIP, so I cannot safely provide exact plugin and wrapper versions yet. The workflow above installs API 36 but does not modify those files automatically.
+
+If the build still fails, share your root `build.gradle` and `gradle/wrapper/gradle-wrapper.properties` from inside `InaiBPro.zip`. I can then provide the exact compatible configuration instead of guessing.
