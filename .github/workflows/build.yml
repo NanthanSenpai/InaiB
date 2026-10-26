@@ -22,7 +22,11 @@ jobs:
         run: |
           set -e
           unzip -q InaiBPro.zip
-          test -f InaiBPro/gradlew
+
+          if [ ! -f InaiBPro/gradlew ]; then
+            echo "ERROR: InaiBPro/gradlew not found."
+            exit 1
+          fi
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -31,6 +35,9 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 36
         shell: bash
         run: |
           sdkmanager "platforms;android-36" "build-tools;36.0.0"
@@ -64,8 +71,14 @@ jobs:
         working-directory: InaiBPro
         run: |
           set -o pipefail
+
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace -PgeckoVersion="$GV" 2>&1 | tee ../build.log
+
+          ./gradlew assembleDebug \
+            --no-daemon \
+            --stacktrace \
+            -PgeckoVersion="$GV" \
+            2>&1 | tee ../build.log
 
       - name: Show build errors
         if: failure()
@@ -74,12 +87,17 @@ jobs:
           echo "========== ERROR SUMMARY =========="
 
           if [ -f build.log ]; then
-            grep -n -i -E 'error:|what went wrong|could not|failed|unresolved|not found|requires libraries|compile against version' build.log | head -80 || true
+            grep -n -i -E \
+              'error:|what went wrong|could not|failed|unresolved|not found|requires libraries|compile against version' \
+              build.log | head -80 || true
 
             echo "========== FAILURE DETAILS =========="
-            grep -n -A12 -B3 'What went wrong' build.log | head -80 || true
+
+            grep -n -A12 -B3 'What went wrong' \
+              build.log | head -80 || true
 
             echo "========== LAST 100 LOG LINES =========="
+
             tail -100 build.log
           else
             echo "No build.log was found."
