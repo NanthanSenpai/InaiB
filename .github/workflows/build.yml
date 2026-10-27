@@ -2,145 +2,52 @@ name: Build APK
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
-
-permissions:
-  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    env:
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
       - name: Unpack project
-        shell: bash
-        run: |
-          set -e
-          unzip -q InaiBPro.zip
+        run: unzip -q InaiBPro.zip
 
-          if [ ! -f InaiBPro/gradlew ]; then
-            echo "ERROR: InaiBPro/gradlew not found."
-            exit 1
-          fi
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: 17
 
-      - name: Locate Android SDK tools
-        shell: bash
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses > /dev/null || true
+
+      - name: Find latest GeckoView version
         run: |
-          set -euo pipefail
-
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
-            -type f -name sdkmanager 2>/dev/null \
-            | sort -V | tail -n 1)
-
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: Android sdkmanager was not found."
-            echo "Android SDK location: $ANDROID_HOME"
-            find "$ANDROID_HOME" -maxdepth 4 -type f \
-              -name sdkmanager 2>/dev/null || true
-            exit 1
-          fi
-
-          echo "Using sdkmanager: $SDKMANAGER"
-          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
-          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
-
-      - name: Install Android SDK 36
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          yes | "$SDKMANAGER" --licenses || true
-
-          "$SDKMANAGER" \
-            "platform-tools" \
-            "platforms;android-36" \
-            "build-tools;36.0.0"
-
-      - name: Find GeckoView version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          curl -fsSL \
-            https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview-omni/maven-metadata.xml \
-            -o meta.xml
-
-          V=$(sed -n \
-            's:.*<release>\([^<]*\)</release>.*:\1:p' \
-            meta.xml | head -n 1)
-
-          if [ -z "$V" ]; then
-            V=$(grep -o '<version>[^<]*' meta.xml \
-              | sed 's/<version>//' \
-              | tail -n 1)
-          fi
-
-          if [ -z "$V" ]; then
-            echo "ERROR: Could not determine GeckoView version."
-            cat meta.xml
-            exit 1
-          fi
-
-          echo "Using GeckoView version: $V"
+          curl -fsSL https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview-omni/maven-metadata.xml -o meta.xml || { echo "Could not fetch GeckoView metadata"; curl -sS https://maven.mozilla.org/maven2/org/mozilla/geckoview/ | head -40; exit 1; }
+          cat meta.xml
+          V=$(grep -o '<release>[^<]*' meta.xml | sed 's/<release>//')
+          if [ -z "$V" ]; then V=$(grep -o '<version>[^<]*' meta.xml | tail -1 | sed 's/<version>//'); fi
+          echo "Using GeckoView $V"
           echo "GV=$V" >> "$GITHUB_ENV"
 
       - name: Build debug APK
-        shell: bash
         working-directory: InaiBPro
         run: |
-          set -o pipefail
-
           chmod +x gradlew
-
-          ./gradlew assembleDebug \
-            --no-daemon \
-            --stacktrace \
-            -PgeckoVersion="$GV" \
-            2>&1 | tee ../build.log
-
-      - name: Show build errors
-        if: failure()
+          ./gradlew assembleDebug --no-daemon -PgeckoVersion=$GV 2>&1 | tee ../build.log
+          exit ${PIPESTATUS[0]}
         shell: bash
+
+      - name: SHOW ERRORS HERE
+        if: failure()
         run: |
-          echo "========== ERROR SUMMARY =========="
+          echo "===== ERROR SUMMARY ====="
+          grep -n -E "^e: |error:|What went wrong|Could not|FAILED|Unresolved|not found" build.log | head -40
+          grep -n -A6 "What went wrong" build.log | head -30
 
-          if [ -f build.log ]; then
-            grep -n -i -E \
-              'error:|what went wrong|could not|failed|unresolved|not found|requires libraries|compile against version' \
-              build.log | head -80 || true
-
-            echo "========== FAILURE DETAILS =========="
-
-            grep -n -A12 -B3 'What went wrong' \
-              build.log | head -80 || true
-
-            echo "========== LAST 100 LOG LINES =========="
-
-            tail -100 build.log
-          else
-            echo "No build.log was found."
-          fi
-
-      - name: Upload debug APK
-        if: success()
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: InaiBPro-debug-apk
           path: InaiBPro/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
-          retention-days: 7
+          
