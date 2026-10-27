@@ -26,8 +26,13 @@ jobs:
         run: |
           curl -fsSL https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview-omni/maven-metadata.xml -o meta.xml || { echo "Could not fetch GeckoView metadata"; curl -sS https://maven.mozilla.org/maven2/org/mozilla/geckoview/ | head -40; exit 1; }
           cat meta.xml
-          V=$(grep -o '<release>[^<]*' meta.xml | sed 's/<release>//')
-          if [ -z "$V" ]; then V=$(grep -o '<version>[^<]*' meta.xml | tail -1 | sed 's/<version>//'); fi
+          # Newest release in the 135-140 range: compatible with our Android build tools.
+          V=$(grep -o '<version>[^<]*' meta.xml | sed 's/<version>//' | grep -E '^(13[5-9]|140)\.' | tail -1)
+          if [ -z "$V" ]; then
+            echo "NO VERSION 135-140 FOUND. Versions available (last 40):"
+            grep -o '<version>[^<]*' meta.xml | sed 's/<version>//' | tail -40
+            exit 1
+          fi
           echo "Using GeckoView $V"
           echo "GV=$V" >> "$GITHUB_ENV"
 
